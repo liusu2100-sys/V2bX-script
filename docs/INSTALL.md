@@ -1,11 +1,11 @@
 # V2bX 节点一键安装教程（新手版）
 
-本教程介绍如何用本仓库的优化版 `install.sh` 在一台 Linux VPS 上安装 [V2bX](https://github.com/wyx2685/V2bX) 节点后端，并对接 Xboard / V2board 面板。
+本教程介绍如何用本仓库的优化版 `install.sh` 在一台 Linux VPS 上安装 [V2bX](https://github.com/liusu2100-sys/V2bX) 节点后端，并对接 Xboard / V2board 面板。
 
 > **说明**
 >
-> - 本仓库只优化了 **安装脚本** `install.sh`（系统识别、依赖安装等）。V2bX 程序本身从上游 [wyx2685/V2bX 的 Releases](https://github.com/wyx2685/V2bX/releases) 下载；管理命令 `V2bX`（即上游的 `V2bX.sh`）和配置生成向导（上游的 `initconfig.sh`）从上游 [wyx2685/V2bX-script](https://github.com/wyx2685/V2bX-script) 下载。
-> - 上游官方文档：<https://v2bx.v-50.me/>，配置文件详解见 [配置文件说明](https://v2bx.v-50.me/v2bx/v2bx-pei-zhi-wen-jian-shuo-ming/config)、证书见 [自动申请证书说明](https://v2bx.v-50.me/v2bx/gong-neng-shuo-ming/cert)。
+> - 本项目已完全自托管：安装脚本 `install.sh`、管理命令 `V2bX`（`V2bX.sh`）和配置生成向导（`initconfig.sh`）都来自本仓库 [liusu2100-sys/V2bX-script](https://github.com/liusu2100-sys/V2bX-script)；V2bX 程序从自己的分支 [liusu2100-sys/V2bX 的 Releases](https://github.com/liusu2100-sys/V2bX/releases) 下载。安装过程不再访问任何第三方地址，也没有统计上报。维护方法见 [MAINTAIN.md](MAINTAIN.md)。
+> - 参考资料（原作者的第三方文档站，仅供查阅，安装不依赖它）：<https://v2bx.v-50.me/>，配置文件详解见 [配置文件说明](https://v2bx.v-50.me/v2bx/v2bx-pei-zhi-wen-jian-shuo-ming/config)、证书见 [自动申请证书说明](https://v2bx.v-50.me/v2bx/gong-neng-shuo-ming/cert)。
 > - 文中所有 **`https://你的面板域名`、`你的通讯密钥`、`node.example.com`、节点 ID `1`** 等都是 **示例占位符**，请替换成你自己的真实信息。
 
 ## 目录
@@ -199,7 +199,7 @@ wget -N https://raw.githubusercontent.com/liusu2100-sys/V2bX-script/main/install
 
 ### 安装指定版本
 
-在命令末尾加上 V2bX 的版本号（即 [Releases](https://github.com/wyx2685/V2bX/releases) 页面中的 tag，例如 `v0.4.0`）：
+在命令末尾加上 V2bX 的版本号（即 [Releases](https://github.com/liusu2100-sys/V2bX/releases) 页面中的 tag，例如 `v0.4.0`）：
 
 ```bash
 bash <(curl -Ls https://raw.githubusercontent.com/liusu2100-sys/V2bX-script/main/install.sh) v0.4.0
@@ -433,7 +433,7 @@ V2bX restart
 
 ## 6. 管理命令
 
-安装后可以用 `V2bX`（或小写 `v2bx`）管理，以下内容来自上游管理脚本 `V2bX.sh`。
+安装后可以用 `V2bX`（或小写 `v2bx`）管理，以下内容来自本仓库的管理脚本 `V2bX.sh`。
 
 ### 6.1 交互菜单
 
@@ -553,19 +553,19 @@ V2bX version      - 查看 V2bX 版本
   bash <(curl -Ls https://raw.githubusercontent.com/liusu2100-sys/V2bX-script/main/install.sh) v0.4.0
   ```
 
-- 提示 **「下载 V2bX 失败，请确保你的服务器能够下载 Github 的文件」** 或 **「下载 V2bX vX.X.X 失败，请确保此版本存在」**：检查版本号是否存在于 [Releases](https://github.com/wyx2685/V2bX/releases)（需要带 `v` 前缀），并测试网络：
+- 提示 **「下载 V2bX 失败，请确保你的服务器能够下载 Github 的文件」** 或 **「下载 V2bX vX.X.X 失败，请确保此版本存在」**：检查版本号是否存在于 [Releases](https://github.com/liusu2100-sys/V2bX/releases)（需要带 `v` 前缀），并测试网络：
 
   ```bash
   curl -I https://github.com
   curl -I https://raw.githubusercontent.com
-  curl -s https://api.github.com/repos/wyx2685/V2bX/releases/latest | grep tag_name
+  curl -s https://api.github.com/repos/liusu2100-sys/V2bX/releases/latest | grep tag_name
   ```
 
 - 一键命令运行后 **什么都没发生 / 报语法错误**：通常是 `raw.githubusercontent.com` 无法访问，下载到的内容为空或是错误页。可先用 `curl -I` 测试，或检查服务器 DNS（`cat /etc/resolv.conf`）。
 - 安装后 `V2bX` 命令不存在：管理脚本下载失败。可单独重新下载：
 
   ```bash
-  curl -o /usr/bin/V2bX -Ls https://raw.githubusercontent.com/wyx2685/V2bX-script/master/V2bX.sh
+  curl -fLs -o /usr/bin/V2bX https://raw.githubusercontent.com/liusu2100-sys/V2bX-script/main/V2bX.sh
   chmod +x /usr/bin/V2bX
   ```
 
@@ -640,7 +640,7 @@ timedatectl set-ntp true           # systemd 系统开启自动校时
 
 ### 9.1 更新
 
-**方法一（推荐，使用本仓库的优化脚本）**：重新运行一键命令即可，已有的 `/etc/V2bX/config.json` 等配置 **不会被覆盖**，安装完成后会自动启动服务：
+**方法一**：重新运行一键命令即可，已有的 `/etc/V2bX/config.json` 等配置 **不会被覆盖**，安装完成后会自动启动服务：
 
 ```bash
 # 更新到最新版
@@ -657,13 +657,15 @@ V2bX update            # 交互输入版本，直接回车为最新版
 V2bX update v0.4.0     # 指定版本
 ```
 
-> 注意：`V2bX update` / `V2bX install` 调用的是 **上游** `wyx2685/V2bX-script` 的 `install.sh`，不是本仓库的优化版。在本仓库重点适配的系统（如 Alpine、Arch、无 os-release 的老系统）上建议使用方法一。
+> `V2bX update` / `V2bX install` 下载并运行的就是 **本仓库** 的 `install.sh`（与方法一完全相同），V2bX 程序来自 [liusu2100-sys/V2bX 的 Releases](https://github.com/liusu2100-sys/V2bX/releases)，两种方法效果一致。
 
-更新管理脚本本身：
+更新管理脚本本身（从本仓库重新下载 `V2bX.sh` 到 `/usr/bin/V2bX`）：
 
 ```bash
 V2bX update_shell
 ```
+
+> 旧版本管理脚本：如果服务器上的 `/usr/bin/V2bX` 是以前从原作者仓库安装的，它的 `update` / `update_shell` 仍指向原作者仓库。先执行一次上面「8.1」中的重新下载命令（或重新运行一键安装命令），之后就会全部使用本仓库。
 
 ### 9.2 卸载
 

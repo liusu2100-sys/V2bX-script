@@ -1,10 +1,15 @@
 #!/bin/bash
-# Optimized install.sh for V2bX (fork of wyx2685/V2bX-script install.sh).
+# Optimized install.sh for V2bX, self-hosted by liusu2100-sys.
+# Originally derived from wyx2685/V2bX-script install.sh (credit: upstream).
 #
-# Same install paths (/usr/local/V2bX, /etc/V2bX), same download URLs, same
-# systemd / OpenRC service units, same prompts and arguments as upstream.
-# Changes are limited to OS / version / package-manager / init detection and
-# dependency installation robustness.
+# Same install paths (/usr/local/V2bX, /etc/V2bX), same systemd / OpenRC
+# service units, same prompts and arguments as upstream. Differences:
+#   * all downloads come from the repositories configured in the
+#     "Repository constants" block below (no third-party URLs);
+#   * no telemetry / statistics call;
+#   * TLS certificates are verified (fallback without verification only if
+#     the download fails with a certificate error, with a warning);
+#   * more robust OS / version / package-manager / init detection.
 #
 # Supported: CentOS 7+ / RHEL / Rocky / AlmaLinux / Oracle Linux / Fedora
 #            (yum or dnf), Ubuntu 16+, Debian 8+, Alpine (apk + OpenRC),
@@ -20,15 +25,28 @@
 # For testing only: `V2BX_INSTALL_SOURCE_ONLY=1 source install.sh` loads the
 # functions without running anything.
 
+# ---------------------------------------------------------------------------
+# Repository constants: change the owner / repos / branch HERE (keep them in
+# sync with V2bX.sh and initconfig.sh). Each value can also be overridden by
+# an environment variable of the same name prefixed with V2BX_, e.g.
+#     V2BX_REPO_OWNER=someone bash install.sh
+# ---------------------------------------------------------------------------
+REPO_OWNER="${V2BX_REPO_OWNER:-liusu2100-sys}"
+SCRIPT_REPO="${V2BX_SCRIPT_REPO:-${REPO_OWNER}/V2bX-script}"   # install.sh / V2bX.sh / initconfig.sh
+SCRIPT_BRANCH="${V2BX_SCRIPT_BRANCH:-main}"
+CORE_REPO="${V2BX_CORE_REPO:-${REPO_OWNER}/V2bX}"              # V2bX binaries (GitHub Releases)
+SCRIPT_URL_BASE="https://raw.githubusercontent.com/${SCRIPT_REPO}/${SCRIPT_BRANCH}"
+RELEASE_API="https://api.github.com/repos/${CORE_REPO}/releases/latest"
+RELEASE_DL_BASE="https://github.com/${CORE_REPO}/releases/download"
+DOC_URL="https://github.com/${SCRIPT_REPO}/blob/${SCRIPT_BRANCH}/docs/INSTALL.md"
+# ---------------------------------------------------------------------------
+
 red='\033[0;31m'
 green='\033[0;32m'
 yellow='\033[0;33m'
 plain='\033[0m'
 
 cur_dir=$(pwd)
-SCRIPT_URL_BASE="https://raw.githubusercontent.com/wyx2685/V2bX-script/master"
-RELEASE_API="https://api.github.com/repos/wyx2685/V2bX/releases/latest"
-RELEASE_DL_BASE="https://github.com/wyx2685/V2bX/releases/download"
 
 err()  { echo -e "${red}$*${plain}"; }
 ok()   { echo -e "${green}$*${plain}"; }
@@ -408,10 +426,57 @@ check_status() {
     fi
 }
 
+# wget with certificate verification; only if it fails with a TLS/certificate
+# error (wget exit code 5, e.g. outdated CA bundle on an EOL system) retry
+# once without verification and print a warning.
+# usage: wget_tls OUTPUT URL [extra wget args...]
+wget_tls() {
+    local out="$1" url="$2" rc
+    shift 2
+    wget -N --progress=bar "$@" -O "${out}" "${url}"
+    rc=$?
+    if [[ ${rc} -eq 5 ]]; then
+        warn "TLS 证书校验失败（系统 CA 证书可能过旧），将跳过证书校验重试一次：${url}"
+        wget --no-check-certificate -N --progress=bar "$@" -O "${out}" "${url}"
+        rc=$?
+    fi
+    return ${rc}
+}
+
+# curl with certificate verification, same fallback (curl exit 35/51/58/60/77/83
+# are TLS / certificate errors). Fails on HTTP errors (-f).
+# usage: curl_tls OUTPUT URL
+curl_tls() {
+    local out="$1" url="$2" rc
+    curl -fLs -o "${out}" "${url}"
+    rc=$?
+    case "${rc}" in
+        35|51|58|60|77|83)
+            warn "TLS 证书校验失败（系统 CA 证书可能过旧），将跳过证书校验重试一次：${url}"
+            curl -kfLs -o "${out}" "${url}"
+            rc=$?
+            ;;
+    esac
+    return ${rc}
+}
+
+get_latest_version() {
+    local json rc
+    json=$(curl -fLs "${RELEASE_API}")
+    rc=$?
+    case "${rc}" in
+        35|51|58|60|77|83)
+            warn "TLS 证书校验失败（系统 CA 证书可能过旧），将跳过证书校验重试一次：${RELEASE_API}"
+            json=$(curl -kfLs "${RELEASE_API}")
+            ;;
+    esac
+    echo "${json}" | grep '"tag_name":' | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/'
+}
+
 download_v2bx_zip() {
     local version="$1"
     local url="${RELEASE_DL_BASE}/${version}/V2bX-linux-${arch}.zip"
-    wget --no-check-certificate -N --progress=bar -O /usr/local/V2bX/V2bX-linux.zip "${url}"
+    wget_tls /usr/local/V2bX/V2bX-linux.zip "${url}"
 }
 
 install_service() {
@@ -519,7 +584,7 @@ install_V2bX() {
     cd /usr/local/V2bX/ || exit 1
 
     if [[ $# -eq 0 ]]; then
-        last_version=$(curl -Ls "${RELEASE_API}" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+        last_version=$(get_latest_version)
         if [[ -z "${last_version}" ]]; then
             err "检测 V2bX 版本失败，可能是超出 Github API 限制，请稍后再试，或手动指定 V2bX 版本安装"
             exit 1
@@ -550,7 +615,7 @@ install_V2bX() {
     if [[ ! -f /etc/V2bX/config.json ]]; then
         cp config.json /etc/V2bX/
         echo -e ""
-        echo -e "全新安装，请先参看教程：https://v2bx.v-50.me/，配置必要的内容"
+        echo -e "全新安装，请先参看教程：${DOC_URL}，配置必要的内容"
         first_install=true
     else
         start_service
@@ -561,14 +626,19 @@ install_V2bX() {
         if check_status; then
             ok "V2bX 重启成功"
         else
-            err "V2bX 可能启动失败，请稍后使用 V2bX log 查看日志信息，若无法启动，则可能更改了配置格式，请前往 wiki 查看：https://github.com/V2bX-project/V2bX/wiki"
+            err "V2bX 可能启动失败，请稍后使用 V2bX log 查看日志信息，若无法启动，则可能更改了配置格式，请前往文档查看：${DOC_URL}"
         fi
         first_install=false
     fi
 
     copy_default_configs
 
-    curl -o /usr/bin/V2bX -Ls "${SCRIPT_URL_BASE}/V2bX.sh"
+    if ! curl_tls /usr/bin/V2bX.tmp "${SCRIPT_URL_BASE}/V2bX.sh"; then
+        rm -f /usr/bin/V2bX.tmp
+        err "下载 V2bX 管理脚本失败：${SCRIPT_URL_BASE}/V2bX.sh"
+    else
+        mv -f /usr/bin/V2bX.tmp /usr/bin/V2bX
+    fi
     chmod +x /usr/bin/V2bX
     if [[ ! -L /usr/bin/v2bx ]]; then
         ln -s /usr/bin/V2bX /usr/bin/v2bx
@@ -578,17 +648,20 @@ install_V2bX() {
     cd "${cur_dir}" || true
     rm -f install.sh
     print_usage
-    curl -fsS --max-time 10 "https://api.v-50.me/counter_v2bx" || true
 
     # 首次安装询问是否生成配置文件
     if [[ ${first_install} == true ]]; then
         read -rp "检测到你为第一次安装V2bX,是否自动直接生成配置文件？(y/n): " if_generate
         if [[ ${if_generate} == [Yy] ]]; then
-            curl -o ./initconfig.sh -Ls "${SCRIPT_URL_BASE}/initconfig.sh"
-            # shellcheck source=/dev/null
-            source initconfig.sh
-            rm -f initconfig.sh
-            generate_config_file
+            if curl_tls ./initconfig.sh "${SCRIPT_URL_BASE}/initconfig.sh"; then
+                # shellcheck source=/dev/null
+                source initconfig.sh
+                rm -f initconfig.sh
+                generate_config_file
+            else
+                rm -f initconfig.sh
+                err "下载 initconfig.sh 失败，请稍后运行 V2bX generate 生成配置文件"
+            fi
         fi
     fi
 }

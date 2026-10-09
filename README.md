@@ -1,13 +1,17 @@
-# V2bX 一键安装脚本（兼容性优化版）
+# V2bX 一键安装脚本（自托管 · 兼容性优化版）
 
 > 📖 **新手请先看：[详细安装教程（docs/INSTALL.md）](docs/INSTALL.md)** —— 包含面板准备、各系统前置步骤、安装交互说明、配置文件示例、管理命令与常见问题排查。
 
-本项目是 [wyx2685/V2bX-script](https://github.com/wyx2685/V2bX-script) 中 `install.sh` 的**优化分支**。
-在**不改变任何功能和行为**的前提下（安装路径、下载地址、systemd / OpenRC 服务文件、提示文字与颜色、版本参数均与上游一致），
-重点改进了系统识别、版本判断、包管理器选择和依赖安装的兼容性与健壮性。
+本项目源自 [wyx2685/V2bX-script](https://github.com/wyx2685/V2bX-script)（感谢原作者），现已**完全自托管、由本人维护**：
 
-> 注意：脚本仍然从上游 **wyx2685/V2bX 的 GitHub Releases** 下载 V2bX 程序，
-> 并从上游 V2bX-script 仓库下载管理脚本 `V2bX.sh` 与 `initconfig.sh`，本仓库不分发任何二进制文件。
+- 安装脚本 `install.sh`、管理脚本 `V2bX.sh`、配置向导 `initconfig.sh` 都在本仓库 [liusu2100-sys/V2bX-script](https://github.com/liusu2100-sys/V2bX-script)；
+- V2bX 程序从自己的分支 [liusu2100-sys/V2bX](https://github.com/liusu2100-sys/V2bX) 的 [Releases](https://github.com/liusu2100-sys/V2bX/releases) 下载（由该仓库的 GitHub Actions 构建）；
+- `V2bX install` / `V2bX update` / `V2bX update_shell` 也全部使用以上两个仓库；
+- 已移除第三方统计上报；下载默认校验 TLS 证书。
+
+安装路径、systemd / OpenRC 服务文件、提示文字与颜色、版本参数均与原版一致，并改进了系统识别、版本判断、包管理器选择和依赖安装的兼容性与健壮性。
+
+> 维护者请看：[docs/MAINTAIN.md](docs/MAINTAIN.md)（发布新版本、同步上游、修改仓库地址、剩余外部依赖）。
 
 ## 快速开始
 
@@ -67,6 +71,9 @@ bash <(curl -Ls https://raw.githubusercontent.com/liusu2100-sys/V2bX-script/main
 
 ## 相对上游的改动
 
+- **完全自托管**：所有下载地址集中在每个脚本顶部的 “Repository constants” 常量块（`REPO_OWNER`、`SCRIPT_REPO`、`SCRIPT_BRANCH`、`CORE_REPO`），改一处即可；移除 `api.v-50.me` 统计请求；首次安装的教程链接指向本仓库文档。
+- **TLS**：去掉 `--no-check-certificate`，默认校验证书；仅当下载因证书错误失败（系统 CA 过旧）时提示并跳过校验重试一次。管理脚本 / 安装脚本先下载到临时文件，下载失败不会覆盖已有的 `/usr/bin/V2bX`。
+
 - **系统识别**：优先读取 `/etc/os-release` 的 `ID` / `ID_LIKE`（不直接 source，避免副作用），识别 centos、rhel、rocky、almalinux、ol、fedora、ubuntu、debian、alpine、arch 及其衍生版；
   缺少 os-release 时依次回退到 `/etc/redhat-release`、`/etc/alpine-release`、`/etc/arch-release`、`/etc/lsb-release`、`/etc/debian_version`，最后才使用上游的 `/etc/issue`、`/proc/version` 规则（容器中 `/proc/version` 反映的是宿主机内核，容易误判）。
 - **版本判断**：只取主版本号整数（`16.04`→16、`8.9`→8），兼容缺少 `VERSION_ID` 的系统（Arch 滚动版、Debian testing/sid）；版本限制只作用于对应的原生发行版（如 Fedora、Amazon Linux 不再套用 “CentOS 7+” 规则）；无法识别版本号时给出提示而不是误判退出。
@@ -81,6 +88,17 @@ bash <(curl -Ls https://raw.githubusercontent.com/liusu2100-sys/V2bX-script/main
   - 保持上游 “不带参数即安装最新版” 的语义（不会把空参数当作版本号）。
 - **代码结构**：拆分为函数、变量全部加引号，通过 `bash -n` 与 `shellcheck` 检查；兼容 CentOS 7 的 bash 4.2。
   可通过 `V2BX_INSTALL_SOURCE_ONLY=1 source install.sh` 只加载函数用于测试（正常执行时无影响）。
+
+## 仓库结构
+
+| 文件 | 说明 |
+| --- | --- |
+| `install.sh` | 一键安装 / 更新脚本 |
+| `V2bX.sh` | 管理脚本（安装为 `/usr/bin/V2bX`、`/usr/bin/v2bx`） |
+| `initconfig.sh` | 首次安装时的配置生成向导（被 `install.sh` 下载并 source） |
+| `docs/INSTALL.md` | 详细安装教程 |
+| `docs/MAINTAIN.md` | 维护说明 |
+| `tests/smoke.sh` | 冒烟测试 |
 
 ## 测试
 
