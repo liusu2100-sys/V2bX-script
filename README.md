@@ -1,11 +1,27 @@
 # V2bX 一键安装脚本（兼容性优化版）
 
+> 📖 **新手请先看：[详细安装教程（docs/INSTALL.md）](docs/INSTALL.md)** —— 包含面板准备、各系统前置步骤、安装交互说明、配置文件示例、管理命令与常见问题排查。
+
 本项目是 [wyx2685/V2bX-script](https://github.com/wyx2685/V2bX-script) 中 `install.sh` 的**优化分支**。
 在**不改变任何功能和行为**的前提下（安装路径、下载地址、systemd / OpenRC 服务文件、提示文字与颜色、版本参数均与上游一致），
 重点改进了系统识别、版本判断、包管理器选择和依赖安装的兼容性与健壮性。
 
 > 注意：脚本仍然从上游 **wyx2685/V2bX 的 GitHub Releases** 下载 V2bX 程序，
 > 并从上游 V2bX-script 仓库下载管理脚本 `V2bX.sh` 与 `initconfig.sh`，本仓库不分发任何二进制文件。
+
+## 快速开始
+
+1. 在面板（Xboard / V2board）后台新建节点，记下 **面板地址**、**通讯密钥**、**节点 ID** 和 **节点协议**。
+2. 以 root 身份在 VPS 上执行（Alpine 需先 `apk add bash curl`）：
+
+   ```bash
+   bash <(curl -Ls https://raw.githubusercontent.com/liusu2100-sys/V2bX-script/main/install.sh)
+   ```
+
+3. 首次安装时按提示输入 `y` 进入配置生成向导，填写上面的信息；或者输入 `n`，之后手动编辑 `/etc/V2bX/config.json` 再执行 `V2bX start`。
+4. 用 `V2bX status` / `V2bX log` 检查运行状态，并在面板中确认节点在线。
+
+详细步骤与排错见 [docs/INSTALL.md](docs/INSTALL.md)。
 
 ## 支持的系统
 
@@ -38,7 +54,7 @@ bash <(curl -Ls https://raw.githubusercontent.com/liusu2100-sys/V2bX-script/main
 bash <(curl -Ls https://raw.githubusercontent.com/liusu2100-sys/V2bX-script/main/install.sh) v0.x.x
 ```
 
-（将 `liusu2100-sys/V2bX-script` 替换为实际的仓库地址。）
+详细说明见 [安装教程](docs/INSTALL.md)。
 
 安装完成后与上游一样使用 `V2bX` / `v2bx` 命令管理：`V2bX start|stop|restart|status|log|update|generate|uninstall ...`
 
