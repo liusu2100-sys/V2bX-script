@@ -22,6 +22,7 @@ initconfig.sh     首次安装时的配置生成向导，install.sh 下载后 so
 docs/INSTALL.md   安装教程（给用户看）
 docs/MAINTAIN.md  本文件（给维护者看）
 tests/smoke.sh    冒烟测试（只加载函数，测试系统识别等，不真正安装）
+tests/checksum.sh 离线测试 SHA-256 校验（正确 / 篡改 / 两种 .dgst 格式）
 ```
 
 脚本之间的调用关系：
@@ -66,7 +67,7 @@ git push origin v0.4.1
 推送 tag 后，Actions 里的 **Build and Release** 工作流会：
 
 1. `release`：为该 tag 创建一个 **草稿（draft）** Release（已存在则跳过）；
-2. `build`：并行编译所有平台，每个平台上传 `V2bX-<平台>.zip` 和 `V2bX-<平台>.zip.dgst`（md5/sha1/sha256/sha512），文件名与上游完全相同；
+2. `build`：并行编译所有平台，每个平台上传 `V2bX-<平台>.zip` 和 `V2bX-<平台>.zip.dgst`（md5/sha1/sha256/sha512），文件名与上游完全相同；**install.sh 会用 `.dgst` 里的 SHA-256 校验 zip，所以不要删掉或改变 `.dgst` 的格式**；
 3. `publish`：**全部平台编译成功后**才把 Release 发布并标记为 Latest。
 
 在此之前用户安装拿到的仍是上一个版本，不会出现「Release 已有但文件还没传完」的情况。若有平台编译失败，Release 保持草稿，修复后重新推送一个新 tag，或在 Actions 页面手动运行（见下）。
@@ -124,7 +125,7 @@ git diff main upstream/master -- V2bX.sh initconfig.sh install.sh    # 先看上
 不建议直接 merge（本仓库的脚本改动较多）。推荐看完 diff 后，把需要的改动手工搬过来，然后：
 
 - 确认没有引入新的第三方地址：`grep -n 'wyx2685\|http' V2bX.sh initconfig.sh install.sh`
-- 确认上游没有重新加入统计请求（例如 `api.v-50.me/counter_v2bx`）
+- 确认上游没有重新加入统计请求（例如 `api.v-50.me/counter_v2bx`），也没有重新加入 `--no-check-certificate` / `curl -k` 或 `bash <(curl …)`（新第三方脚本须固定 commit + SHA-256，见第 5 节）
 - 跑检查：`bash -n *.sh && shellcheck -S error install.sh V2bX.sh initconfig.sh`
 
 ---
@@ -154,24 +155,66 @@ CORE_REPO="${V2BX_CORE_REPO:-${REPO_OWNER}/V2bX}"              # 程序仓库（
   V2BX_REPO_OWNER=someone bash install.sh
   ```
 
-- `V2bX.sh` 里还有 `BBR_SCRIPT_URL`（菜单 11，第三方 BBR 脚本，见第 5 节）。
+- `V2bX.sh` 里还有 `BBR_SCRIPT_COMMIT` / `BBR_SCRIPT_SHA256_DEFAULT`（菜单 11，第三方 BBR 脚本，固定版本 + 校验，见第 5 节）。
 
 ---
 
-## 5. 剩余的外部依赖
+## 5. 安全说明 / 外部依赖
 
-「脱离第三方」指的是：安装/更新/管理过程只访问你自己的仓库，不再依赖原作者的仓库、Release 或统计服务。以下依赖仍然存在，属于基础设施或可选功能：
+原则：**可以依赖第三方脚本或资源，但必须走 HTTPS、尽量固定版本（commit / digest）并做完整性校验，危险操作前明确提示。**
+本节是 2026-10 安全审计的结果，新增依赖时请同步更新此表。
 
-| 依赖 | 何时用到 | 说明 / 替代方案 |
+### 5.1 依赖清单
+
+| 依赖 | 用途 | 何时用到 | 风险 | 缓解措施 |
+| --- | --- | --- | --- | --- |
+| 一键安装入口 `bash <(curl -Ls …/V2bX-script/main/install.sh)` | 安装 | 用户手动执行 | 中（curl\|bash，以 root 运行 `main` 分支最新内容） | 只来自本仓库，HTTPS；信任根是本仓库的写权限（保护好 GitHub 账号 / 开启 2FA）。谨慎用户可先 `curl -o install.sh …` 查看后再 `bash install.sh`。 |
+| `raw.githubusercontent.com/…/V2bX-script/main/{V2bX.sh,initconfig.sh,install.sh}` | 管理脚本、配置向导；`V2bX update/install/update_shell` 重新下载 | 安装 / 更新 / 首次生成配置 | 中（跟随 `main` 分支，无单独校验） | 同源于本仓库，HTTPS + 证书校验；先下载到临时文件，失败不覆盖已有文件。 |
+| `api.github.com/repos/liusu2100-sys/V2bX/releases/latest` | 获取最新版本号 | 安装 / 更新（未指定版本时） | 低 | HTTPS；只取 tag 名。 |
+| `github.com/liusu2100-sys/V2bX/releases/download/<tag>/V2bX-linux-<arch>.zip` + `.zip.dgst` | V2bX 程序 + geoip/geosite + 示例配置 | 安装 / 更新 | 低（已修复） | **解压前用 `.dgst` 中的 SHA-256 校验，不匹配立即中止（fail closed）**；`.dgst` 缺失时警告并继续，设 `V2BX_REQUIRE_CHECKSUM=1` 则中止。校验工具依次尝试 `sha256sum`（coreutils / busybox）、`shasum -a 256`、`openssl dgst -sha256`，都没有则中止。注意 `.dgst` 与 zip 同在一个 Release，只能防传输损坏 / CDN 或镜像篡改，不能防 Release 本身被替换。 |
+| TLS 证书 | 所有下载 | 始终 | 低（已修复） | 以前证书错误时会自动 `--no-check-certificate` / `curl -k` 重试（可被中间人利用），**现已改为默认不重试**；只有显式设置 `V2BX_INSECURE=1` 才跳过校验重试一次（zip 仍会做 SHA-256 校验）。 |
+| 系统软件源（yum/dnf/apt/apk/pacman）、`epel-release` | 安装 wget curl unzip tar cron socat ca-certificates | 安装 | 低 | 发行版官方源，包有 GPG 签名；EPEL 来自 CentOS extras 源（已签名）。EOL 系统需自行切换归档源。 |
+| ylx2016/Linux-NetSpeed `tcpx.sh` | 菜单 11「一键安装 bbr」 | 仅用户选择菜单 11 时 | **高**（第三方 root 脚本，会换内核） | **已固定到 commit `dc2197d4dcb7…` 并校验 SHA-256 `7d0cb5cd…`**，下载到临时文件，显示风险说明，需输入 `y` 确认才运行。自定义 `V2BX_BBR_SCRIPT_URL` 时可配 `V2BX_BBR_SCRIPT_SHA256`，否则提示“未校验”。脚本自身的剩余风险见 5.2。 |
+| 菜单 16「放行所有端口」 | 关闭 firewalld/ufw、`setenforce 0`、清空 iptables | 仅用户选择菜单 16 时 | 高（本机失去防火墙） | 功能保留，**新增风险说明 + 确认（默认 n）**。建议只放行节点端口。 |
+| 证书申请（V2bX 内置 lego → Let's Encrypt / DNS 服务商 API） | 节点 TLS 证书 | `CertMode` 为 `http`/`dns` 时 | 低 | V2bX 程序内部完成，HTTPS；DNS API 密钥保存在 `/etc/V2bX/config.json`（仅 root 可读为宜）。 |
+| GitHub Actions：`actions/checkout`、`actions/setup-go`、`actions/upload-artifact`、`actions/download-artifact`、`docker/*-action`、`github/codeql-action` | V2bX 仓库构建 / 发布 / Docker 镜像 / CodeQL | CI | 低（已修复） | **全部固定到完整 commit SHA**（行尾注释写版本）；Docker 工作流 `permissions: contents: read, packages: write`；`steps.meta.outputs.json` 改为通过环境变量传入脚本（避免注入）；CodeQL 从已退役的 v2 升到 v3。 |
+| Go 工具链（`actions/setup-go` 下载，自带校验）与 Go 模块（`proxy.golang.org`） | 编译 V2bX | CI 构建时 | 低 | 版本锁定在 `go.mod` / `go.sum`，`go mod download` 会对照 `go.sum` 与 sum.golang.org 校验。Go 从 1.25.0 升到 **1.25.14**（包含此后的标准库安全修复）。 |
+| Loyalsoldier/v2ray-rules-dat `geoip.dat` / `geosite.dat` | 打包进 zip 的路由规则 | **仅 CI 构建时** | 低（已加固） | HTTPS（`--proto '=https'`），**下载同目录的 `.sha256sum` 并校验，不匹配则构建失败**。上游每天更新，极少数情况下 dat 与 sha256sum 恰好在更新瞬间不一致，重跑即可。 |
+| Docker 基础镜像 `golang:1.25.14-alpine`、`alpine:3.24` | Docker 镜像构建 | 仅 Docker 工作流 | 低（已加固） | `Dockerfile` 中按 **digest 固定**（`tag@sha256:…`），升级时 tag 与 digest 一起改。 |
+| ghcr.io | 发布 Docker 镜像 | 仅手动发布 Release / 手动运行 Docker 工作流 / PR | 低 | 与一键安装无关；不需要可在 Actions 中禁用该工作流。 |
+| v2bx.v-50.me 文档站 | 文档参考链接 | 不访问 | 无 | 脚本不会访问。 |
+| 统计 / 遥测 | — | — | 无 | 已移除上游的 `api.v-50.me/counter_v2bx` 统计请求，脚本不上报任何信息。 |
+
+### 5.2 第三方脚本 `tcpx.sh` 审阅结果（commit `dc2197d4dcb72729860eed0f3aa96efb78963461`，2026-08-18）
+
+固定版本只能保证「运行的就是审阅过的那份」，脚本本身的行为仍然有以下风险，使用前请知悉：
+
+- 自带的下载函数 `safe_wget` **一律使用 `wget --no-check-certificate`**；检测到国内网络（访问 cloudflare.com/cdn-cgi/trace 判断）时，GitHub 资源会经第三方镜像（gh-proxy.com、ghproxy.net、fastgit.cc、githubdog.com、tvv.tw、ghfast.top）下载；对下载的脚本只检查“非空且首行是 shebang”，没有哈希校验。
+- 会安装作者自己构建、**未签名**的内核包（GitHub `ylx2016/kernel` Release），以及 ELRepo / XanMod / Liquorix 等第三方内核源（XanMod 用 signed-by 密钥，源地址为 `http://deb.xanmod.org`；Liquorix 执行其官网的加源脚本）；部分旧内核从 `http://snapshot.debian.org`（明文 HTTP）下载并 `dpkg -i`。
+- 修改 grub 默认启动项、sysctl；换内核可能导致无法开机。
+- 菜单里的其它选项还会运行更多远程脚本：`tcp.hy2.sh`（Brutal）、`uk0/lotspeed` install.sh、`Kylin010/tcpfit`（以 `bash <(curl …)` 直接运行，未落盘校验）。
+- 首次运行会把自身复制到 `/usr/local/bin/tcpx`；其「更新脚本」菜单从 `master` 分支下载最新版（不再受本仓库固定的版本约束）。
+- 按关键字审阅（下载、执行、systemd、crontab、SELinux、上报）未发现遥测 / 上报、关闭 SELinux 或写 crontab 的行为；未逐行审阅全部约 3000 行。
+
+**升级固定版本的方法**：在 GitHub 上选新的 commit，下载 `https://raw.githubusercontent.com/ylx2016/Linux-NetSpeed/<commit>/tcpx.sh` 审阅（至少 `grep -nE 'curl|wget|bash <|http://'`），然后把 `V2bX.sh` 顶部的 `BBR_SCRIPT_COMMIT` 与 `BBR_SCRIPT_SHA256_DEFAULT`（`sha256sum tcpx.sh`）一起更新。
+
+### 5.3 环境变量开关
+
+| 变量 | 默认 | 作用 |
 | --- | --- | --- |
-| **GitHub**（`github.com`、`api.github.com`、`raw.githubusercontent.com`、`objects.githubusercontent.com`） | 每次安装/更新 | 托管脚本与 Release。API 未登录每小时 60 次限制，超限时可直接指定版本号安装。若要彻底不依赖 GitHub，需要自建下载站并修改常量块里的 URL 格式。 |
-| **系统软件源**（yum/dnf/apt/apk/pacman 镜像，EPEL） | 安装依赖 wget curl unzip tar cron socat ca-certificates | 由各发行版提供；EOL 系统需切换归档源。 |
-| **GitHub Actions 运行环境** 及官方 Action：`actions/checkout`、`actions/setup-go`、`actions/upload-artifact` | 构建 Release | GitHub 官方维护。已去掉第三方 `svenstaro/upload-release-action`，改用 Runner 自带的 `gh` 命令上传。 |
-| **Go 工具链与 Go 模块**（`proxy.golang.org` 及各模块源仓库：Xray-core、sing-box、hysteria、lego 等） | 构建时 | V2bX 本身就是基于这些项目编译的，属于源码依赖；版本锁定在 `go.mod` / `go.sum`。 |
-| **Loyalsoldier/v2ray-rules-dat**（`geoip.dat`、`geosite.dat`） | **仅构建时**下载并打进 zip | 运行时和更新时不会再去下载。想去掉这个依赖：把这两个文件上传到你自己的地方（例如本仓库或某个 Release），然后修改 `release.yml` 里的 `GEO_DAT_BASE_URL`。 |
-| **ylx2016/Linux-NetSpeed `tcpx.sh`** | 仅当在菜单中选 **11（一键安装 bbr）** | 第三方脚本（会更换内核），不在本仓库维护；不用就不会访问。地址在 `V2bX.sh` 的 `BBR_SCRIPT_URL`。 |
-| **v2bx.v-50.me 文档站** | 只在文档里作为参考链接 | 脚本不会访问。 |
-| **ghcr.io**（V2bX 仓库的 “Publish Docker image” 工作流） | 仅当在 GitHub 网页上手动发布 Release 或手动运行该工作流时（Actions 自动发布不会触发它） | 与一键安装无关；不需要 Docker 镜像可以在 Actions 中禁用该工作流。 |
+| `V2BX_INSECURE=1` | 关 | 证书错误时允许跳过 TLS 校验重试一次（不推荐，仅用于 CA 证书过旧的 EOL 系统）。 |
+| `V2BX_REQUIRE_CHECKSUM=1` | 关 | Release 缺少 `.dgst` 时中止安装（默认只警告）。 |
+| `V2BX_BBR_SCRIPT_URL` / `V2BX_BBR_SCRIPT_SHA256` | 内置固定值 | 替换菜单 11 的 BBR 脚本地址及其 SHA-256。 |
+
+### 5.4 GitHub Actions 版本升级
+
+工作流中的 `uses:` 必须写完整 commit SHA，例如：
+
+```yaml
+uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+```
+
+查某个 tag 对应的 SHA：`gh api repos/actions/checkout/commits/v4.4.0 --jq .sha`。可以开启 Dependabot（`package-ecosystem: github-actions`）自动提 PR 升级。
 
 ---
 
@@ -182,6 +225,8 @@ bash -n install.sh V2bX.sh initconfig.sh
 shellcheck -S error install.sh V2bX.sh initconfig.sh
 grep -n 'wyx2685' install.sh V2bX.sh initconfig.sh   # 只允许出现在注释里（致谢）
 docker run --rm -v "$PWD":/t:ro debian:12 bash /t/tests/smoke.sh /t/install.sh
+docker run --rm -v "$PWD":/t:ro debian:12 bash /t/tests/checksum.sh /t/install.sh
+grep -nE 'no-check-certificate|curl -k|bash <\(curl' install.sh V2bX.sh initconfig.sh   # 只允许出现在 V2BX_INSECURE 分支和注释里
 git push origin main
 ```
 

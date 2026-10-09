@@ -15,7 +15,20 @@ CORE_REPO="${V2BX_CORE_REPO:-${REPO_OWNER}/V2bX}"              # V2bX binaries (
 SCRIPT_URL_BASE="https://raw.githubusercontent.com/${SCRIPT_REPO}/${SCRIPT_BRANCH}"
 CORE_REPO_URL="https://github.com/${CORE_REPO}"
 # Optional third-party BBR / kernel script used by menu item 11 only.
-BBR_SCRIPT_URL="${V2BX_BBR_SCRIPT_URL:-https://github.com/ylx2016/Linux-NetSpeed/raw/master/tcpx.sh}"
+# Pinned to a reviewed commit + SHA-256 (see docs/MAINTAIN.md "安全说明").
+# To upgrade: pick a new commit, review tcpx.sh, update BOTH values.
+BBR_SCRIPT_COMMIT="dc2197d4dcb72729860eed0f3aa96efb78963461"   # ylx2016/Linux-NetSpeed master @ 2026-08-18
+BBR_SCRIPT_SHA256_DEFAULT="7d0cb5cdc964fa0887ccec8caaa937fc430d3335c957b1c90701eee9ee45eaef"
+BBR_SCRIPT_URL_DEFAULT="https://raw.githubusercontent.com/ylx2016/Linux-NetSpeed/${BBR_SCRIPT_COMMIT}/tcpx.sh"
+BBR_SCRIPT_URL="${V2BX_BBR_SCRIPT_URL:-${BBR_SCRIPT_URL_DEFAULT}}"
+if [[ -n "${V2BX_BBR_SCRIPT_URL:-}" ]]; then
+    BBR_SCRIPT_SHA256="${V2BX_BBR_SCRIPT_SHA256:-}"      # custom URL: checksum only if given
+else
+    BBR_SCRIPT_SHA256="${BBR_SCRIPT_SHA256_DEFAULT}"
+fi
+# Set V2BX_INSECURE=1 to allow ONE retry without TLS verification after a
+# certificate error (outdated CA bundle). Off by default.
+V2BX_INSECURE="${V2BX_INSECURE:-0}"
 # ---------------------------------------------------------------------------
 
 red='\033[0;31m'
@@ -113,21 +126,40 @@ before_show_menu() {
     show_menu
 }
 
-# Download URL to FILE with TLS verification (-f: fail on HTTP errors). Only
-# if it fails with a TLS / certificate error (old CA bundle) retry once
-# without verification, with a warning.
+# Download URL to FILE with TLS verification (-f: fail on HTTP errors).
+# A TLS / certificate error is only retried without verification when the
+# user explicitly set V2BX_INSECURE=1.
 fetch_tls() {
     local url="$1" out="$2" rc
     curl -fLs -o "${out}" "${url}"
     rc=$?
     case "${rc}" in
         35|51|58|60|77|83)
-            echo -e "${yellow}TLS 证书校验失败（系统 CA 证书可能过旧），将跳过证书校验重试一次：${url}${plain}"
-            curl -kfLs -o "${out}" "${url}"
-            rc=$?
+            echo -e "${red}TLS 证书校验失败：${url}${plain}"
+            if [[ "${V2BX_INSECURE}" == "1" ]]; then
+                echo -e "${yellow}V2BX_INSECURE=1：跳过证书校验重试一次${plain}"
+                curl -kfLs -o "${out}" "${url}"
+                rc=$?
+            else
+                echo -e "${yellow}系统 CA 证书可能过旧（或系统时间不正确），请更新 ca-certificates 后重试；确需临时跳过校验可设置 V2BX_INSECURE=1（不推荐）${plain}"
+            fi
             ;;
     esac
     return ${rc}
+}
+
+# Print the SHA-256 of FILE (sha256sum from coreutils/busybox, shasum, or openssl).
+sha256_of() {
+    local f="$1" h=""
+    if command -v sha256sum >/dev/null 2>&1; then
+        h=$(sha256sum "${f}" 2>/dev/null | awk '{print $1}')
+    elif command -v shasum >/dev/null 2>&1; then
+        h=$(shasum -a 256 "${f}" 2>/dev/null | awk '{print $1}')
+    elif command -v openssl >/dev/null 2>&1; then
+        h=$(openssl dgst -sha256 "${f}" 2>/dev/null | awk '{print $NF}')
+    fi
+    [[ -n "${h}" ]] || return 1
+    echo "${h}" | tr '[:upper:]' '[:lower:]'
 }
 
 # Download install.sh from SCRIPT_REPO and run it with the given arguments.
@@ -348,7 +380,42 @@ show_log() {
 
 install_bbr() {
     # Third-party script (not maintained in this repo), see docs/MAINTAIN.md.
-    bash <(curl -L -s "${BBR_SCRIPT_URL}")
+    # Downloaded to a temp file, checked against a pinned SHA-256, and only run
+    # after explicit confirmation.
+    local tmp got
+    echo -e "${yellow}即将运行第三方脚本 ylx2016/Linux-NetSpeed tcpx.sh（以 root 身份）：${plain}"
+    echo -e "  来源: ${BBR_SCRIPT_URL}"
+    echo -e "  它可能：更换内核并修改 grub 引导、添加第三方软件源（ELRepo/XanMod/Liquorix）、"
+    echo -e "  修改 sysctl，并在其菜单中继续下载其它脚本/内核（其下载函数不校验 TLS 证书，国内网络下还会经第三方 GitHub 镜像下载）。"
+    echo -e "  更换内核有导致无法开机的风险，请先做好快照/备份。"
+    tmp=$(mktemp /tmp/V2bX-tcpx.XXXXXX) || return 1
+    if ! fetch_tls "${BBR_SCRIPT_URL}" "${tmp}" || [[ ! -s "${tmp}" ]]; then
+        rm -f "${tmp}"
+        echo -e "${red}下载 BBR 脚本失败：${BBR_SCRIPT_URL}${plain}"
+        return 1
+    fi
+    if [[ -n "${BBR_SCRIPT_SHA256}" ]]; then
+        if ! got=$(sha256_of "${tmp}"); then
+            rm -f "${tmp}"
+            echo -e "${red}未找到 sha256sum / shasum / openssl，无法校验脚本，已取消${plain}"
+            return 1
+        fi
+        if [[ "${got}" != "$(echo "${BBR_SCRIPT_SHA256}" | tr '[:upper:]' '[:lower:]')" ]]; then
+            rm -f "${tmp}"
+            echo -e "${red}BBR 脚本 SHA-256 校验失败（期望 ${BBR_SCRIPT_SHA256}，实际 ${got}），已取消运行${plain}"
+            return 1
+        fi
+        echo -e "${green}SHA-256 校验通过: ${got}${plain}"
+    else
+        echo -e "${red}警告：自定义的 V2BX_BBR_SCRIPT_URL 未提供 V2BX_BBR_SCRIPT_SHA256，脚本内容未经校验！${plain}"
+    fi
+    if ! confirm "确认运行该第三方脚本吗?" "n"; then
+        rm -f "${tmp}"
+        echo -e "已取消"
+        return 0
+    fi
+    bash "${tmp}"
+    rm -f "${tmp}"
 }
 
 update_shell() {
@@ -982,6 +1049,13 @@ EOF
 
 # 放开防火墙端口
 open_ports() {
+    echo -e "${yellow}此操作会：停用 firewalld / ufw、临时关闭 SELinux (setenforce 0)、"
+    echo -e "将 iptables 默认策略设为 ACCEPT 并清空所有规则（包括你自己添加的规则），本机将不再有任何防火墙保护。${plain}"
+    echo -e "${yellow}更安全的做法是只放行节点端口，例如: ufw allow 443 / firewall-cmd --add-port=443/tcp --permanent${plain}"
+    if ! confirm "确定要关闭防火墙并放开所有端口吗?" "n"; then
+        echo -e "已取消"
+        return 0
+    fi
     systemctl stop firewalld.service 2>/dev/null
     systemctl disable firewalld.service 2>/dev/null
     setenforce 0 2>/dev/null

@@ -7,7 +7,7 @@
 - 安装脚本 `install.sh`、管理脚本 `V2bX.sh`、配置向导 `initconfig.sh` 都在本仓库 [liusu2100-sys/V2bX-script](https://github.com/liusu2100-sys/V2bX-script)；
 - V2bX 程序从自己的分支 [liusu2100-sys/V2bX](https://github.com/liusu2100-sys/V2bX) 的 [Releases](https://github.com/liusu2100-sys/V2bX/releases) 下载（由该仓库的 GitHub Actions 构建）；
 - `V2bX install` / `V2bX update` / `V2bX update_shell` 也全部使用以上两个仓库；
-- 已移除第三方统计上报；下载默认校验 TLS 证书。
+- 已移除第三方统计上报；下载始终校验 TLS 证书；V2bX 程序包解压前校验 SHA-256；第三方 BBR 脚本固定版本并校验。详见 [docs/MAINTAIN.md 第 5 节「安全说明 / 外部依赖」](docs/MAINTAIN.md#5-安全说明--外部依赖)。
 
 安装路径、systemd / OpenRC 服务文件、提示文字与颜色、版本参数均与原版一致，并改进了系统识别、版本判断、包管理器选择和依赖安装的兼容性与健壮性。
 
@@ -72,7 +72,8 @@ bash <(curl -Ls https://raw.githubusercontent.com/liusu2100-sys/V2bX-script/main
 ## 相对上游的改动
 
 - **完全自托管**：所有下载地址集中在每个脚本顶部的 “Repository constants” 常量块（`REPO_OWNER`、`SCRIPT_REPO`、`SCRIPT_BRANCH`、`CORE_REPO`），改一处即可；移除 `api.v-50.me` 统计请求；首次安装的教程链接指向本仓库文档。
-- **TLS**：去掉 `--no-check-certificate`，默认校验证书；仅当下载因证书错误失败（系统 CA 过旧）时提示并跳过校验重试一次。管理脚本 / 安装脚本先下载到临时文件，下载失败不会覆盖已有的 `/usr/bin/V2bX`。
+- **TLS**：去掉 `--no-check-certificate`，始终校验证书；证书错误时不再自动跳过校验，只有显式设置 `V2BX_INSECURE=1` 才跳过校验重试一次（系统 CA 过旧时使用，不推荐）。
+- **完整性校验**：下载 `V2bX-linux-<arch>.zip` 后用同一 Release 的 `.zip.dgst` 校验 SHA-256，不匹配立即中止；菜单 11 的第三方 BBR 脚本固定到指定 commit 并校验 SHA-256，运行前需确认；菜单 16（关闭防火墙）运行前需确认。管理脚本 / 安装脚本先下载到临时文件，下载失败不会覆盖已有的 `/usr/bin/V2bX`。
 
 - **系统识别**：优先读取 `/etc/os-release` 的 `ID` / `ID_LIKE`（不直接 source，避免副作用），识别 centos、rhel、rocky、almalinux、ol、fedora、ubuntu、debian、alpine、arch 及其衍生版；
   缺少 os-release 时依次回退到 `/etc/redhat-release`、`/etc/alpine-release`、`/etc/arch-release`、`/etc/lsb-release`、`/etc/debian_version`，最后才使用上游的 `/etc/issue`、`/proc/version` 规则（容器中 `/proc/version` 反映的是宿主机内核，容易误判）。

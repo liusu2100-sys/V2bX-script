@@ -455,7 +455,7 @@ V2bX
 | 7 | 查看 V2bX 状态 |
 | 8 | 查看 V2bX 日志 |
 | 9 / 10 | 设置 / 取消 开机自启 |
-| 11 | 一键安装 bbr（最新内核，调用第三方脚本） |
+| 11 | 一键安装 bbr（最新内核，调用第三方脚本 ylx2016 tcpx.sh；已固定版本并校验 SHA-256，运行前需确认；⚠️ 会更换内核，请先快照/备份） |
 | 12 | 查看 V2bX 版本 |
 | 13 | 生成 X25519 密钥（Reality 节点用） |
 | 14 | 升级 V2bX 维护脚本（重新下载 `/usr/bin/V2bX`） |
@@ -568,6 +568,11 @@ V2bX version      - 查看 V2bX 版本
   curl -fLs -o /usr/bin/V2bX https://raw.githubusercontent.com/liusu2100-sys/V2bX-script/main/V2bX.sh
   chmod +x /usr/bin/V2bX
   ```
+
+### 8.1.1 「TLS 证书校验失败」/「SHA-256 校验失败」
+
+- **TLS 证书校验失败**：通常是系统 CA 证书过旧或系统时间不对。先更新证书并同步时间（如 `apt-get install -y ca-certificates` / `yum install -y ca-certificates`，见 [8.6](#86-时间不同步)），再重新运行。脚本默认**不会**自动跳过证书校验；确认网络可信又必须临时绕过时，可在命令前加 `V2BX_INSECURE=1`（不推荐）。
+- **SHA-256 校验失败，已中止安装**：下载的程序包与 Release 中 `.dgst` 记录的哈希不一致（下载不完整或被篡改）。脚本已自动删除该文件，请稍后重试或换网络；不要手动绕过。
 
 ### 8.2 依赖安装失败 / 软件源报错
 

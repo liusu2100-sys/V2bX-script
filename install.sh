@@ -7,8 +7,10 @@
 #   * all downloads come from the repositories configured in the
 #     "Repository constants" block below (no third-party URLs);
 #   * no telemetry / statistics call;
-#   * TLS certificates are verified (fallback without verification only if
-#     the download fails with a certificate error, with a warning);
+#   * TLS certificates are always verified (insecure retry only with the
+#     explicit opt-in V2BX_INSECURE=1);
+#   * the release zip is verified against its published SHA-256 (.dgst)
+#     before it is unpacked (fails closed on mismatch);
 #   * more robust OS / version / package-manager / init detection.
 #
 # Supported: CentOS 7+ / RHEL / Rocky / AlmaLinux / Oracle Linux / Fedora
@@ -426,25 +428,42 @@ check_status() {
     fi
 }
 
-# wget with certificate verification; only if it fails with a TLS/certificate
-# error (wget exit code 5, e.g. outdated CA bundle on an EOL system) retry
-# once without verification and print a warning.
+# ---------------------------------------------------------------------------
+# Download helpers. TLS certificates are ALWAYS verified. A download that
+# fails with a certificate error (e.g. outdated CA bundle on an EOL system)
+# is NOT retried insecurely unless the user explicitly opts in with
+#     V2BX_INSECURE=1 bash install.sh
+# (the zip is still checked against its SHA-256 below in that case).
+# ---------------------------------------------------------------------------
+V2BX_INSECURE="${V2BX_INSECURE:-0}"
+
+tls_fail_hint() {
+    err "TLS 证书校验失败：$1"
+    if [[ "${V2BX_INSECURE}" == "1" ]]; then
+        return 0
+    fi
+    warn "系统 CA 证书可能过旧，请先更新 ca-certificates（或系统时间是否正确），然后重试。"
+    warn "如确认网络可信、需要临时跳过证书校验，可设置 V2BX_INSECURE=1 后重新运行（不推荐）。"
+    return 1
+}
+
+# wget with certificate verification (wget exit 5 = TLS / certificate error).
 # usage: wget_tls OUTPUT URL [extra wget args...]
 wget_tls() {
     local out="$1" url="$2" rc
     shift 2
     wget -N --progress=bar "$@" -O "${out}" "${url}"
     rc=$?
-    if [[ ${rc} -eq 5 ]]; then
-        warn "TLS 证书校验失败（系统 CA 证书可能过旧），将跳过证书校验重试一次：${url}"
+    if [[ ${rc} -eq 5 ]] && tls_fail_hint "${url}"; then
+        warn "V2BX_INSECURE=1：跳过证书校验重试一次：${url}"
         wget --no-check-certificate -N --progress=bar "$@" -O "${out}" "${url}"
         rc=$?
     fi
     return ${rc}
 }
 
-# curl with certificate verification, same fallback (curl exit 35/51/58/60/77/83
-# are TLS / certificate errors). Fails on HTTP errors (-f).
+# curl with certificate verification (curl exit 35/51/58/60/77/83 are TLS /
+# certificate errors). Fails on HTTP errors (-f).
 # usage: curl_tls OUTPUT URL
 curl_tls() {
     local out="$1" url="$2" rc
@@ -452,9 +471,11 @@ curl_tls() {
     rc=$?
     case "${rc}" in
         35|51|58|60|77|83)
-            warn "TLS 证书校验失败（系统 CA 证书可能过旧），将跳过证书校验重试一次：${url}"
-            curl -kfLs -o "${out}" "${url}"
-            rc=$?
+            if tls_fail_hint "${url}"; then
+                warn "V2BX_INSECURE=1：跳过证书校验重试一次：${url}"
+                curl -kfLs -o "${out}" "${url}"
+                rc=$?
+            fi
             ;;
     esac
     return ${rc}
@@ -466,17 +487,82 @@ get_latest_version() {
     rc=$?
     case "${rc}" in
         35|51|58|60|77|83)
-            warn "TLS 证书校验失败（系统 CA 证书可能过旧），将跳过证书校验重试一次：${RELEASE_API}"
-            json=$(curl -kfLs "${RELEASE_API}")
+            if tls_fail_hint "${RELEASE_API}" >&2; then
+                json=$(curl -kfLs "${RELEASE_API}")
+            fi
             ;;
     esac
     echo "${json}" | grep '"tag_name":' | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/'
 }
 
+# Print the SHA-256 of FILE (lower-case hex). Works with GNU coreutils,
+# busybox (Alpine), perl's shasum or openssl. Returns 1 if no tool exists.
+sha256_of() {
+    local f="$1" h=""
+    if command -v sha256sum >/dev/null 2>&1; then
+        h=$(sha256sum "${f}" 2>/dev/null | awk '{print $1}')
+    elif command -v shasum >/dev/null 2>&1; then
+        h=$(shasum -a 256 "${f}" 2>/dev/null | awk '{print $1}')
+    elif command -v openssl >/dev/null 2>&1; then
+        h=$(openssl dgst -sha256 "${f}" 2>/dev/null | awk '{print $NF}')
+    fi
+    [[ -n "${h}" ]] || return 1
+    to_lower "${h}"
+}
+
+# Extract the SHA-256 from a release .dgst file. Lines look like
+#   "SHA2-256= <hex>" (OpenSSL 3) or "SHA256= <hex>" (OpenSSL 1.x).
+dgst_sha256() {
+    awk 'toupper($1) ~ /^SHA(2-)?256(\(.*\))?=?$/ { print tolower($NF); exit }' "$1"
+}
+
+# Verify ZIP against DGST. Fails closed on mismatch or unparsable digest.
+# usage: verify_zip ZIP DGST
+verify_zip() {
+    local zip="$1" dgst="$2" want got
+    want=$(dgst_sha256 "${dgst}")
+    if [[ ! "${want}" =~ ^[0-9a-f]{64}$ ]]; then
+        err "校验文件 $(basename "${dgst}") 中没有有效的 SHA-256，已中止安装"
+        return 1
+    fi
+    if ! got=$(sha256_of "${zip}"); then
+        err "未找到 sha256sum / shasum / openssl，无法校验文件完整性，已中止安装（请安装 coreutils 或 openssl 后重试）"
+        return 1
+    fi
+    if [[ "${got}" != "${want}" ]]; then
+        err "SHA-256 校验失败，文件可能被篡改或下载不完整，已中止安装！"
+        err "  期望: ${want}"
+        err "  实际: ${got}"
+        return 1
+    fi
+    ok "SHA-256 校验通过: ${got}"
+}
+
+# Download the release zip and its .dgst, verify, leave V2bX-linux.zip in cwd.
+# A missing .dgst (e.g. a hand-made release) only warns, unless
+# V2BX_REQUIRE_CHECKSUM=1 is set.
 download_v2bx_zip() {
     local version="$1"
     local url="${RELEASE_DL_BASE}/${version}/V2bX-linux-${arch}.zip"
-    wget_tls /usr/local/V2bX/V2bX-linux.zip "${url}"
+    local zip=/usr/local/V2bX/V2bX-linux.zip dgst=/usr/local/V2bX/V2bX-linux.zip.dgst
+    rm -f "${zip}" "${dgst}"
+    wget_tls "${zip}" "${url}" || return 1
+    if curl_tls "${dgst}" "${url}.dgst" && [[ -s "${dgst}" ]]; then
+        if ! verify_zip "${zip}" "${dgst}"; then
+            rm -f "${zip}" "${dgst}"
+            exit 1
+        fi
+    else
+        rm -f "${dgst}"
+        if [[ "${V2BX_REQUIRE_CHECKSUM:-0}" == "1" ]]; then
+            err "未能下载校验文件 ${url}.dgst（V2BX_REQUIRE_CHECKSUM=1），已中止安装"
+            rm -f "${zip}"
+            exit 1
+        fi
+        warn "警告：未找到校验文件 ${url}.dgst，跳过 SHA-256 校验（仅依赖 HTTPS）"
+    fi
+    rm -f "${dgst}"
+    return 0
 }
 
 install_service() {
